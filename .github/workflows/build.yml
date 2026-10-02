@@ -5,10 +5,15 @@ on:
   push:
     branches: [ main, master ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 350
+    env:
+      BUILD_DIR: /home/runner/twrp
 
     steps:
       - name: Checkout device tree
@@ -33,6 +38,9 @@ jobs:
             lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
             libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
             python3 python-is-python3 default-jdk bc lz4
+          # Some prebuilt AOSP binaries expect libncurses.so.5 / libtinfo.so.5
+          sudo ln -sf /lib/x86_64-linux-gnu/libncurses.so.6 /lib/x86_64-linux-gnu/libncurses.so.5 || true
+          sudo ln -sf /lib/x86_64-linux-gnu/libtinfo.so.6 /lib/x86_64-linux-gnu/libtinfo.so.5 || true
 
       - name: Install repo tool
         run: |
@@ -49,22 +57,22 @@ jobs:
 
       - name: Sync TWRP minimal manifest (Android 11 / twrp-11)
         run: |
-          mkdir -p ~/twrp
-          cd ~/twrp
+          mkdir -p "$BUILD_DIR"
+          cd "$BUILD_DIR"
           ~/bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
           ~/bin/repo sync -c -j8 --force-sync --no-clone-bundle --no-tags
           df -h /
 
       - name: Place device tree
         run: |
-          mkdir -p ~/twrp/device/EEBBK
-          rm -rf ~/twrp/device/EEBBK/P21H170
-          cp -r "$GITHUB_WORKSPACE/device/EEBBK/P21H170" ~/twrp/device/EEBBK/P21H170
-          ls -la ~/twrp/device/EEBBK/P21H170
+          mkdir -p "$BUILD_DIR/device/EEBBK"
+          rm -rf "$BUILD_DIR/device/EEBBK/P21H170"
+          cp -r "$GITHUB_WORKSPACE/device/EEBBK/P21H170" "$BUILD_DIR/device/EEBBK/P21H170"
+          ls -la "$BUILD_DIR/device/EEBBK/P21H170"
 
       - name: Build recovery.img
         run: |
-          cd ~/twrp
+          cd "$BUILD_DIR"
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
@@ -74,14 +82,24 @@ jobs:
 
       - name: Show outputs
         run: |
-          ls -la ~/twrp/out/target/product/P21H170/ || true
+          ls -la "$BUILD_DIR/out/target/product/P21H170/" || true
 
-      - name: Upload recovery.img
+      - name: Upload recovery.img artifact
         uses: actions/upload-artifact@v4
         with:
-          name: recovery-P21H170
-          path: |
-            ~/twrp/out/target/product/P21H170/recovery.img
-            ~/twrp/out/target/product/P21H170/recovery.img.*
+          name: recovery-P21H170-${{ github.run_number }}
+          path: /home/runner/twrp/out/target/product/P21H170/recovery.img
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish recovery.img as a Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: TWRP recovery P21H170 (build ${{ github.run_number }})
+          body: |
+            Automated TWRP recovery.img build for EEBBK P21H170 (Unisoc UMS512).
+            Manifest: minimal-manifest-twrp/platform_manifest_twrp_aosp@twrp-11
+          files: /home/runner/twrp/out/target/product/P21H170/recovery.img
+          fail_on_unmatched_files: true
